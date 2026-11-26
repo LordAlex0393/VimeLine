@@ -354,11 +354,10 @@
             <div class="panel" style="margin-bottom:0">
                 <div class="panel-header">
                     <div class="panel-title">Доля режимов (клик по легенде скрывает режим)</div>
-                    <button class="btn" style="font-size:11px; padding:4px 8px;"
-                        onclick="toggleSoloLevelingPie()">Скрыть/Показать Solo Leveling</button>
                 </div>
-                <div id="pieChart" class="chart-box"></div>
+                <div id="pieChart" class="chart-box" style="height: 390px;"></div>
             </div>
+
             <div class="panel" style="margin-bottom:0">
                 <div class="panel-header">
                     <div class="panel-title">Пиковый онлайн по дням</div>
@@ -514,9 +513,17 @@
         }
 
         function updateModesChart(times = rawData.timestamps.map(fmtTime)) {
-            const series = rawData.modes.filter(m => selectedKeys.has(m.key)).map((m, i) => ({
-                name: m.name, type: 'line', smooth: 0.2, showSymbol: false, itemStyle: { color: PALETTE.at(i % PALETTE.length) }, data: m.series
-            }));
+            const activeList = rawData.modes.filter(m => selectedKeys.has(m.key));
+            const colorMap = {};
+            const series = activeList.map((m, i) => {
+                const color = PALETTE.at(i % PALETTE.length);
+                colorMap[m.key] = color;
+                return {
+                    name: m.name, type: 'line', smooth: 0.2, showSymbol: false,
+                    itemStyle: { color: color }, lineStyle: { color: color }, data: m.series
+                };
+            });
+
             modesChart.setOption({
                 backgroundColor: 'transparent', tooltip: { trigger: 'axis' },
                 toolbox: { right: 15, top: -5, feature: { dataZoom: { yAxisIndex: 'none', title: { zoom: 'Выделить область', back: 'Сбросить зум' } } } },
@@ -531,17 +538,24 @@
                 series: series
             }, true);
             modesChart.dispatchAction({ type: 'takeGlobalCursor', key: 'dataZoomSelect', dataZoomSelectActive: true });
-            renderPills();
+            renderPills(colorMap);
         }
 
-        function renderPills() {
+        function renderPills(colorMap = {}) {
             const q = document.getElementById('modeSearch').value.toLowerCase();
             const box = document.getElementById('modePills'); box.innerHTML = '';
             rawData.modes.forEach(m => {
                 if (q && !m.name.toLowerCase().includes(q) && !m.key.toLowerCase().includes(q)) return;
+                const isSel = selectedKeys.has(m.key);
+                const color = colorMap[m.key];
                 const p = document.createElement('div');
-                p.className = 'pill' + (selectedKeys.has(m.key) ? ' selected' : '');
-                p.innerHTML = `<span class="dot"></span>${m.name} <b>(${m.current})</b>`;
+                p.className = 'pill' + (isSel ? ' selected' : '');
+                if (isSel && color) {
+                    p.style.borderColor = color;
+                    p.style.backgroundColor = color + '22';
+                }
+                const dotStyle = isSel && color ? `style="background:${color}; box-shadow: 0 0 6px ${color};"` : '';
+                p.innerHTML = `<span class="dot" ${dotStyle}></span>${m.name} <b>(${m.current})</b>`;
                 p.onclick = () => { selectedKeys.has(m.key) ? selectedKeys.delete(m.key) : selectedKeys.add(m.key); updateModesChart(); };
                 box.appendChild(p);
             });
@@ -553,16 +567,26 @@
 
         function toggleSoloLevelingPie() { hideSoloPie = !hideSoloPie; renderPieChart(); }
         function renderPieChart() {
-            const active = rawData.modes.filter(m => m.current > 0 && (!hideSoloPie || m.key !== 'sololeveling'));
+            const active = rawData.modes.filter(m => m.current > 0);
+            const totalActive = active.reduce((sum, m) => sum + m.current, 0) || 1;
+            const pctMap = {};
+            active.forEach(m => {
+                pctMap[m.name] = ((m.current / totalActive) * 100).toFixed(1);
+            });
+
             pieChart.setOption({
                 backgroundColor: 'transparent',
                 tooltip: { trigger: 'item', formatter: '{b}: <b>{c}</b> ({d}%)' },
-                legend: { type: 'scroll', bottom: 0, textStyle: { color: '#cbd5e1', fontSize: 11 } },
+                legend: {
+                    type: 'plain', bottom: 0, left: 'center', itemGap: 10,
+                    textStyle: { color: '#cbd5e1', fontSize: 11 },
+                    formatter: name => `${name} (${pctMap[name]}%)`
+                },
                 series: [{
-                    type: 'pie', radius: ['38%', '64%'], center: ['50%', '44%'], minAngle: 3,
+                    type: 'pie', radius: ['36%', '60%'], center: ['50%', '38%'], minAngle: 3,
                     itemStyle: { borderRadius: 5, borderColor: '#151a23', borderWidth: 2 },
-                    label: { show: true, color: '#cbd5e1', fontSize: 11, formatter: '{b}' },
-                    labelLine: { show: true, length: 12, length2: 12 },
+                    label: { show: true, color: '#cbd5e1', fontSize: 11, formatter: '{b} — {d}%' },
+                    labelLine: { show: true, length: 10, length2: 10 },
                     data: active.map(m => ({ name: m.name, value: m.current }))
                 }]
             }, true);
@@ -586,4 +610,5 @@
         };
     </script>
 </body>
+
 </html>
