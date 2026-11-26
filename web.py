@@ -1,93 +1,38 @@
 import os
 import sqlite3
-import requests
-import time
 from datetime import datetime, timedelta
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, request, send_from_directory
 
 app = Flask(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_FILE = os.path.join(BASE_DIR, "vime_stats.db")
 
-CUSTOM_NAMES = {
-    "lobby": "Лобби",
-    "sololeveling": "Solo Leveling",
-    "skyblock": "SkyBlock",
-    "prison": "Prison",
-    "prison-lite": "Prison Lite",
-    "luckywars": "Lucky Wars",
-    "farm": "MyLittleFarm",
-    "stealacreature": "Steal a Creature",
-    "bridge": "The Bridge",
-    "petsimulator": "Pets GO",
-    "deathrun": "DeathRun",
-    "ann": "Annihilation",
-    "bb": "BuildBattle",
-    "bp": "BlockParty",
-    "bw": "BedWars",
-    "bwhype": "BedWars Hype",
-    "cp": "ClashPoint",
-    "duels": "Duels",
-    "gg": "GunGame",
-    "hg": "HungerGames",
-    "kpvp": "KitPvP",
-    "mw": "MobWars",
-    "sw": "SkyWars",
-    "swt": "SkyWars Team",
-    "murder": "Murder Mystery",
-    "jumpleague": "Jump League",
-    "turfwars": "Turf Wars",
-    "sheep": "SheepWars",
-    "tntrun": "TNT Run",
-    "tnttag": "TNT Tag",
-    "zombieclaus": "Царство Зомби Мороза",
-    "whitecold": "Белый холод",
-    "squidgame": "Squid Game",
-    "hide": "Hide and Seek",
-    "speedbuilders": "Speed Builders",
-    "teamfortress": "Team Fortress",
-    "fallguys": "Fall Guys",
-    "eggwars": "Egg Wars",
-    "battlebox": "BattleBox",
-    "rodwars": "Rod Wars",
-    "randomrush": "Random Rush",
-    "coingames": "Coin Games",
-    "fireballfight": "Fireball Fight",
-    "css": "Custom Steve Survival",
-    "cor": "Chaos of Reign",
-    "chm": "Chm",
-    "bingo": "Bingo",
+MODE_NAMES = {
+    "lobby": "Лобби", "sololeveling": "Solo Leveling",
+    "skyblock": "SkyBlock", "prison": "Prison", "prison-lite": "Prison Lite",
+    "luckywars": "Lucky Wars", "farm": "MyLittleFarm",
+    "stealacreature": "Steal a Creature", "bridge": "The Bridge",
+    "petsimulator": "Pets GO", "deathrun": "DeathRun", "ann": "Annihilation",
+    "bb": "BuildBattle", "bp": "BlockParty", "bw": "BedWars",
+    "bwhype": "BedWars Hype", "cp": "ClashPoint", "duels": "Duels",
+    "gg": "GunGame", "hg": "HungerGames", "kpvp": "KitPvP",
+    "mw": "MobWars", "sw": "SkyWars", "swt": "SkyWars Team",
+    "murder": "Murder Mystery", "jumpleague": "Jump League",
+    "turfwars": "Turf Wars", "sheep": "SheepWars", "tntrun": "TNT Run",
+    "tnttag": "TNT Tag", "zombieclaus": "Царство Зомби Мороза",
+    "whitecold": "Белый холод", "squidgame": "Squid Game",
+    "hide": "Hide and Seek", "speedbuilders": "Speed Builders",
+    "teamfortress": "Team Fortress", "fallguys": "Fall Guys",
+    "eggwars": "Egg Wars", "battlebox": "BattleBox", "rodwars": "Rod Wars",
+    "randomrush": "Random Rush", "coingames": "Coin Games",
+    "fireballfight": "Fireball Fight", "css": "Custom Steve Survival",
+    "cor": "Chaos of Reign", "chm": "Chm", "bingo": "Bingo",
 }
 
 
-def load_translations():
-    mapping = dict(CUSTOM_NAMES)
-    for _ in range(5):
-        try:
-            resp = requests.get("https://vimeworld.com", timeout=10)
-            resp.raise_for_status()
-            games = resp.json().get("games", {})
-            for key, info in games.items():
-                name = info.get("name", key)
-                if key == "bwhype":
-                    name = f"{name} (Hype)"
-                mapping[key] = name
-                mapping[key.replace("_", "-")] = name
-            print("Русская локализация успешно загружена!")
-            return mapping
-        except Exception:
-            time.sleep(2)
-    print("Локализация не загружена, используем базовую.")
-    return mapping
-
-
-
-TRANSLATIONS = load_translations()
-
-
 def get_mode_name(key):
-    return TRANSLATIONS.get(key) or TRANSLATIONS.get(key.replace("-", "_")) or key
+    return MODE_NAMES.get(key) or MODE_NAMES.get(key.replace("-", "_")) or key
 
 
 def get_db():
@@ -101,9 +46,23 @@ def api_dashboard():
     if not os.path.exists(DB_FILE):
         return jsonify({"error": "База данных еще не найдена."}), 404
 
+    start_q = request.args.get("start", "").strip()
+    end_q = request.args.get("end", "").strip()
+
+    where_clauses = []
+    params = []
+    if start_q:
+        where_clauses.append("timestamp >= ?")
+        params.append(start_q + " 00:00:00")
+    if end_q:
+        where_clauses.append("timestamp <= ?")
+        params.append(end_q + " 23:59:59")
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT timestamp, total FROM total_online ORDER BY timestamp ASC")
+        cur.execute(f"SELECT timestamp, total FROM total_online {where_sql} ORDER BY timestamp ASC", params)
         total_rows = cur.fetchall()
 
         if not total_rows:
@@ -114,73 +73,99 @@ def api_dashboard():
         current_total = totals[-1]
         last_update = timestamps[-1]
 
-        max_all_idx = totals.index(max(totals))
-        peak_all = {"value": totals[max_all_idx], "time": timestamps[max_all_idx]}
+        # Пик и минимум за выбранный период
+        max_idx = totals.index(max(totals))
+        min_idx = totals.index(min(totals))
+        peak_period = {"value": totals[max_idx], "time": timestamps[max_idx]}
+        min_period = {"value": totals[min_idx], "time": timestamps[min_idx]}
+        avg_period = round(sum(totals) / len(totals))
 
-        cutoff_24h = (datetime.strptime(last_update, "%Y-%m-%d %H:%M:%S") - timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
-        recent_24h = [r["total"] for r in total_rows if r["timestamp"] >= cutoff_24h]
-        peak_24h = max(recent_24h) if recent_24h else current_total
-        avg_24h = round(sum(recent_24h) / len(recent_24h)) if recent_24h else current_total
+        # Дневные пики (максимум за каждый день)
+        daily_max = {}
+        for r in total_rows:
+            day = r["timestamp"][:10]
+            val = r["total"]
+            if day not in daily_max or val > daily_max[day]["val"]:
+                daily_max[day] = {"val": val, "time": r["timestamp"]}
 
-        cur.execute("SELECT timestamp, mode_key, count FROM mode_online ORDER BY timestamp ASC")
+        daily_days = sorted(daily_max.keys())
+        daily_vals = [daily_max[d]["val"] for d in daily_days]
+
+        best_day = max(daily_days, key=lambda d: daily_max[d]["val"])
+        worst_day = min(daily_days, key=lambda d: daily_max[d]["val"])
+        # 2. Данные по режимам за выбранный период
+        cur.execute(f"SELECT timestamp, mode_key, count FROM mode_online {where_sql} ORDER BY timestamp ASC", params)
         mode_rows = cur.fetchall()
 
         time_index = {t: i for i, t in enumerate(timestamps)}
         modes_series = {}
-        mode_peaks = {}
 
         for r in mode_rows:
             mk, ts, cnt = r["mode_key"], r["timestamp"], r["count"]
             if mk not in modes_series:
-                modes_series[mk] = list([0] * len(timestamps))
-                mode_peaks[mk] = 0
+                modes_series[mk] = [0] * len(timestamps)
             idx = time_index.get(ts)
             if idx is not None:
                 modes_series[mk][idx] = cnt
-            if cnt > mode_peaks[mk]:
-                mode_peaks[mk] = cnt
 
         modes_info = []
         for mk, series in modes_series.items():
+            peak_val = max(series) if series else 0
+            peak_idx = series.index(peak_val) if series else 0
+            avg_val = round(sum(series) / len(series), 1) if series else 0
             modes_info.append({
                 "key": mk,
                 "name": get_mode_name(mk),
-                "current": series[-1],
-                "peak": mode_peaks[mk],
+                "current": series[-1] if series else 0,
+                "peak": peak_val,
+                "peak_time": timestamps[peak_idx] if timestamps else "",
+                "avg": avg_val,
                 "series": series
             })
         modes_info.sort(key=lambda x: (x["current"], x["peak"]), reverse=True)
 
-        cur.execute("""
-            SELECT strftime('%H', timestamp) as hour, ROUND(AVG(total)) as avg_total
-            FROM total_online GROUP BY hour ORDER BY hour ASC
-        """)
-        hourly_rows = cur.fetchall()
-        hourly = {
-            "hours": [f"{r['hour']}:00" for r in hourly_rows],
-            "values": [int(r["avg_total"]) for r in hourly_rows]
-        }
+        # 3. Тепловая карта (День недели 0..6 x Час 00..23)
+        heatmap_sum = {}
+        heatmap_cnt = {}
+        for r in total_rows:
+            dt = datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S")
+            key = (dt.weekday(), dt.hour)
+            heatmap_sum[key] = heatmap_sum.get(key, 0) + r["total"]
+            heatmap_cnt[key] = heatmap_cnt.get(key, 0) + 1
+
+        heatmap_data = []
+        for (wd, hr), s_val in heatmap_sum.items():
+            heatmap_data.append({
+                "hour": hr,
+                "day": wd,
+                "val": round(s_val / heatmap_cnt[(wd, hr)])
+            })
+
 
     return jsonify({
         "empty": False,
         "summary": {
             "current": current_total,
             "last_update": last_update,
-            "peak_all": peak_all,
-            "peak_24h": peak_24h,
-            "avg_24h": avg_24h,
+            "peak_period": peak_period,
+            "min_period": min_period,
+            "avg_period": avg_period,
+            "best_day": {"date": best_day, "value": daily_max[best_day]["val"], "time": daily_max[best_day]["time"]},
+            "worst_day": {"date": worst_day, "value": daily_max[worst_day]["val"], "time": daily_max[worst_day]["time"]},
             "top_mode": modes_info[0] if modes_info else {"name": "-", "current": 0}
         },
         "timestamps": timestamps,
         "totals": totals,
+        "daily": {"days": daily_days, "values": daily_vals},
         "modes": modes_info,
-        "hourly": hourly
+        "heatmap": heatmap_data
     })
 
 
 @app.route("/")
 def index():
     return send_from_directory(BASE_DIR, "index.html")
+
 
 @app.route("/echarts.min.js")
 def serve_echarts():
